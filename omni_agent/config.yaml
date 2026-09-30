@@ -22,6 +22,16 @@ state:
   db_path: omni_agent/state/omni.db
   json_export_path: omni_agent/state/tasks.json
 
+# Safe mode: every run is a read-only preview unless `--apply` is passed,
+# and real writes show the guarded file list and ask before touching disk.
+safety:
+  dry_run_by_default: true
+  confirm_before_write: true
+  require_approval: false        # true = `omni-agent approve TASK-ID` needed before --apply
+
+evaluation:
+  test_path: backend/tests
+
 cohesion:
   done_threshold: 85
   weights:
@@ -63,6 +73,7 @@ scan:
 reports:
   latest_path: omni_agent/reports/latest.md
   state_snapshot_path: omni_agent/reports/state_snapshot.json
+  dashboard_path: omni_agent/reports/dashboard.html
 
 # V2 GitHub integration: autonomous PR posting after task completion
 github:

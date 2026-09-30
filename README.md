@@ -1,104 +1,203 @@
 # Omni-Agent
 
-**AI execution for real repositories — with evidence, guardrails, and a review gate.**
+**Turns backlog tasks into verified code changes with guardrails.**
 
-Omni-Agent turns unfinished repository tasks into structured, reviewed work. It scans task notes, analyzes scope, proposes and applies allowed changes, evaluates the result, records the evidence, and reports what changed, what passed, what was blocked, and what should happen next.
+Hand Omni-Agent the small repo tasks your team keeps putting off. It previews each change first. It writes only where you've allowed it to, runs your tests, and keeps a receipt: what changed, why, what passed, what was blocked, and what it refused to touch.
 
-The execution engine runs locally against your repository. The GitHub App is intentionally lightweight in v1: it handles installation and Marketplace lifecycle plumbing without requiring access to your source code.
+> Built for one job: **"I have a backlog of repo tasks and I want them done safely."**
 
-> **Evidence before claims. Permission before changes.**
+![Omni-Agent team dashboard](docs/screenshots/dashboard.png)
 
-![Omni-Agent landing page](docs/screenshots/landing-page.png)
-
-## What it does
-
-Omni-Agent runs a guarded task loop:
-
-1. **Scan** markdown task sources such as `memory/tasks/**/*.md`.
-2. **Analyze** the task, dependencies, missing context, scope, and acceptance criteria.
-3. **Build** only inside explicitly allowed paths.
-4. **Evaluate** the result against acceptance criteria, tests, regression checks, lint, and path safety.
-5. **Record** state transitions and evidence.
-6. **Report** completed work, blockers, risks, ROI-oriented evidence, and next actions.
-
-The default engine is hybrid: it can use an LLM when configured and falls back to deterministic rule-based personas when the LLM is unavailable.
-
-## Is Omni-Agent a fit?
-
-The two main questions are simple:
-
-1. **Do you already keep actionable work in markdown?** Omni-Agent's native intake is markdown task memory such as `memory/tasks/**/*.md`, so teams already using `TODO.md`, backlog notes, runbooks, or markdown task files have the shortest path to value.
-2. **Can you run it locally or deploy the supporting services?** The task-execution engine is designed to run locally against the repository. The API and product web layer can also be deployed using the included Render blueprint.
-
-If both answers are yes, Omni-Agent can fit into the workflow without requiring a new project-management system or giving the v1 GitHub App access to repository contents.
-
-## Core features
-
-- Persona-based Analyst → Developer → Evaluator execution loop
-- Markdown task discovery and write-back
-- Explicit allowed/forbidden path guardrails
-- SQLite-backed task lifecycle and transition history
-- Cohesion/evaluation scoring before work is marked done
-- Plain-language work reports
-- ROI-oriented reporting and PR previews
-- Machine-readable JSON output from CLI commands
-- FastAPI backend with health, billing, and GitHub App routes
-- Stripe Checkout for direct Pro/Team sales when configured
-- GitHub App manifest creation flow
-- Signature-verified GitHub webhooks
-- Installation and Marketplace purchase-event audit trails
-- Render blueprint and portable Docker deployment
-
-## Guardrails
-
-Omni-Agent is designed to fail closed around protected areas.
-
-Current write roots include product code, backend service/router/core paths, tests, task memory, and Omni-Agent-owned paths. Sensitive areas such as environment files, secrets/keys, protected Empire-1 canon paths, investor material, and strategy paths are explicitly blocked by the local agent guardrails.
-
-A developer-generated change outside the allowed paths is rejected before disk write.
-
-For the detailed contract, see [`omni_agent/README.md`](omni_agent/README.md).
-
-## CLI
+## See it in 30 seconds
 
 ```bash
-python scripts/omni_agent.py scan
-python scripts/omni_agent.py run-next
-python scripts/omni_agent.py run-next --dry-run
-python scripts/omni_agent.py run-task TASK-001
-python scripts/omni_agent.py status
-python scripts/omni_agent.py report
+curl -fsSL https://raw.githubusercontent.com/empire1-cloud/omni-agent-github-app/main/scripts/install.sh | sh
+omni-agent demo --open
 ```
 
-Add `--json` to supported commands for machine-readable output.
-
-## Local setup
-
-The deployable backend uses Python 3.11.
-
-```bash
-git clone https://github.com/empire1-cloud/empire1-lyrica-ecosystem.git
-cd empire1-lyrica-ecosystem
-
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements-deploy.txt
-```
-
-`backend/requirements-deploy.txt` is the public-host-safe dependency set. The original `backend/requirements.txt` also references an Emergent-private package; outside that environment, Omni-Agent is designed to fall back when that optional LLM integration is unavailable.
-
-Run the CLI from the repository root. For the API:
-
-```bash
-cd backend
-uvicorn server:app --host 0.0.0.0 --port 8000
-```
-
-Then check:
+`demo` copies a tiny sample repo into a temp folder and runs its four tasks end to end. It runs offline with no API key, and your own code is never touched:
 
 ```text
-GET /api/health
+TASK-e7952b61  done             documentation p1: Add a usage section to `docs/USAGE.md` ...
+TASK-29ddc774  done             backend p2: Create `src/textkit/case.py` with a public helper ...
+TASK-ce471830  blocked_context  backend p2: Remove the hard-coded token from `secrets/tokens.py`.
+TASK-bc78d0b1  blocked_context  TODO p3: Integrate with payment provider TBD for invoices.
 ```
+
+Two tasks come back verified. One is refused because it points at a protected path. One stops because the task says "TBD", and Omni-Agent won't guess.
+
+## Your first 10 minutes
+
+```bash
+cd path/to/your/repo
+omni-agent quickstart          # 1. detect repo root + safe write roots, seed example tasks, preview task #1
+omni-agent new "Fix the off-by-one in pagination" --template bugfix --path src/paginate.py --priority p1
+omni-agent preview             # 2. see exactly which files the next task would touch (writes nothing)
+omni-agent run-next --apply    # 3. confirm the file list, then it writes, tests, and scores the change
+omni-agent explain TASK-…      # 4. the receipt
+omni-agent dashboard --open    # 5. queue, blocked, completed, approvals, hours saved
+```
+
+`quickstart` only creates two files, `.omni-agent/config.yaml` and `memory/tasks/inbox.md`, and it never overwrites either one. It finds the repo root by walking up to `.git`. It then proposes write roots from the folders you already have (`src/`, `app/`, `lib/`, `tests/`, `docs/`, …). Run `omni-agent init` instead if you want to review or edit those roots before anything else happens.
+
+No installer? From a checkout: `pip install .` or `python scripts/omni_agent.py <command>`.
+
+## Proof on every task
+
+Every run leaves a receipt built from the local run history, not from the model's own description of what it did. `omni-agent explain <task>` prints it (this one is from the demo repo):
+
+```text
+TASK-29ddc774 — Done — verified
+  backend p2: Create `src/textkit/case.py` with a public helper that checks a string is non-empty.
+
+WHY
+  · must: File 'src/textkit/case.py' exists and is syntactically valid.
+  · must: New backend module has at least one public callable defined.
+WHAT CHANGED
+  create   src/textkit/case.py
+WHAT WAS CHECKED
+  tests: pass  (python3 -m pytest -q tests)
+  lint:  pass
+  acceptance: 3/3 criteria met
+WHAT WAS BLOCKED
+  nothing
+WHAT WAS PROTECTED
+  no protected path was requested
+WHO APPROVED
+  approved by demo at 2026-09-30T05:01:07 — writes: src/textkit/case.py
+```
+
+A task only reaches **done** when its score clears the threshold (85 by default), combining acceptance criteria, tests, regression, lint, and guardrail compliance. Otherwise it stays open with the reason attached.
+
+## Safe by default
+
+- **Preview first.** `run-next` and `run-task` are read-only previews unless you pass `--apply`.
+- **Confirm before writes.** With `--apply`, you see the exact file list and answer `y` before anything touches disk. Scripts must pass `--yes` explicitly. Without it, a non-interactive run refuses to write.
+- **Allowed roots, set per repo.** Writes land only under `guardrails.allowed_paths`.
+- **Always-protected paths.** `.env*`, keys, `secrets/`, `.git/`, and CI workflows are always protected. A task that asks for one is blocked, never redirected to some other file. Path traversal (`src/../.env`) is normalised before matching.
+- **Approvals.** Set `safety.require_approval: true` and `--apply` will refuse until someone runs `omni-agent approve TASK-… --by <name>`. Every approval and every declined write is recorded.
+- **No silent overwrites.** Without an LLM configured, the deterministic fallback only creates new files. It never rewrites existing code.
+
+## Privacy
+
+- **It runs locally.** The task engine runs on your machine, against your checkout.
+- **No broad GitHub access.** The v1 GitHub App requests only `metadata: read` and never reads your source code. Issue import uses *your* token, read-only, and only when you ask for it.
+- **It only modifies allowed areas.** See above. The allowlist lives in a file you can review in a PR.
+- **It keeps evidence.** Every state change, file write, test run, refusal, and approval is stored in a local SQLite file (`.omni-agent/state/omni.db`).
+
+## Why it helps
+
+| You have… | Omni-Agent… |
+|---|---|
+| A backlog note like "add a usage section to the docs" | turns it into a validated change with a receipt |
+| Small refactors spread across files you'd rather not open one by one | scopes the change to the named path and runs your tests |
+| A pile of low-risk maintenance tasks | runs them overnight as previews, so you review file lists in the morning |
+| Paths nobody should touch casually | refuses writes there and tells you it did |
+
+## Before and after
+
+| | Before | With Omni-Agent |
+|---|---|---|
+| Task intake | TODOs scattered across notes, issues, and Jira | One markdown queue: `import github` / `import jira` / `import csv` / `new` |
+| Deciding what changes | Someone opens the files and explores | `preview` lists the files first; nothing is written |
+| Doing the change | Manual, or an AI tool with the run of the repo | Writes only inside allowed roots, after confirmation |
+| Knowing it worked | "Looks fine to me" | Tests, lint, and acceptance criteria scored per task |
+| Reporting | Status meetings | `dashboard`: queue, blocked, done, approvals, hours saved |
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Intake
+    GH[GitHub issues] --> MD
+    JIRA[Jira / CSV export] --> MD
+    NEW[omni-agent new] --> MD
+    MD[memory/tasks/*.md]
+  end
+  MD --> SCAN[Scan + triage]
+  SCAN --> AN[Analyst: scope + acceptance criteria]
+  AN --> DEV[Developer: proposed changes]
+  DEV --> GR{Guardrails:<br/>allowed roots,<br/>protected paths}
+  GR -- refused --> BLK[Blocked + receipt]
+  GR -- ok --> PREV{Preview or --apply?}
+  PREV -- preview --> RCPT
+  PREV -- apply + confirm --> WRITE[Write files]
+  WRITE --> EVAL[Evaluator: tests, lint, criteria, score]
+  EVAL --> RCPT[(Local evidence DB)]
+  BLK --> RCPT
+  RCPT --> OUT[explain · dashboard · report · PR preview]
+```
+
+The Analyst, Developer, and Evaluator can each use an LLM (`persona_mode: hybrid` or `llm`). If the model is unavailable, they fall back to deterministic rules, so a run never depends on a model being up.
+
+## Bring your tasks
+
+Markdown stays the source of truth, but you don't need to write it by hand:
+
+```bash
+omni-agent import github --repo acme/api --label good-first-task   # uses GITHUB_TOKEN if set; read-only
+omni-agent import github --file issues.json    # from: gh issue list --json number,title,body,labels,url
+omni-agent import jira --file jira-export.csv  # Summary, Issue key, Priority, Labels… (repeated Labels columns ok)
+omni-agent import csv --file backlog.csv       # title, priority, type, path, acceptance
+omni-agent new "Document the retry policy" --template docs --path docs/retries.md
+```
+
+Each import is safe to re-run, because tasks already imported are skipped by their `[ref]`. Checkboxes in an issue body, or an `acceptance` column, become acceptance criteria. Any task can carry its own criteria:
+
+```markdown
+- [ ] backend p1: Validate email input in `src/signup.py` [gh#42]
+  - Acceptance: Empty and malformed addresses return a 400.
+```
+
+## Team dashboard and outcomes
+
+`omni-agent dashboard` writes a single self-contained HTML file (plus JSON) with the task queue, blocked work and the reason for each block, completed tasks with the files they changed, check results, scores, who approved what, protected-path refusals, and every receipt. It makes no network calls, so you can attach it to a status update as-is.
+
+`omni-agent status` leads with plain-English outcomes for the last 7 days:
+
+```text
+• Saved about 2 engineering hours last week (2 verified tasks).
+• 100% of test runs passed.
+• 2 tasks stopped and asked for input instead of guessing.
+• Refused 1 write to protected paths.
+```
+
+Hours saved are an estimate: verified tasks × `roi.minutes_per_task_manual` (default 60). Set it to match your team.
+
+## Who it's for
+
+- Small teams that already keep backlog notes in markdown and have lots of repetitive repo work
+- Internal engineering ops: dependency notes, docs gaps, config tidy-ups
+- Junior-dev support and repo cleanup, where you want a reviewable preview before anything lands
+- Code-maintenance tasks where "don't touch these paths" really matters
+
+It is **not** general-purpose AI coding for everything. Large features and cross-cutting redesigns still belong to people.
+
+## CLI reference
+
+| Command | What it does |
+|---|---|
+| `quickstart` / `init` | Set up a repo (detect root + write roots, seed examples) |
+| `demo` | Full run on a bundled sample repo in a temp dir |
+| `new`, `import github\|jira\|csv`, `scan` | Add tasks |
+| `preview [TASK]` | Show what a task would change; never writes |
+| `run-next`, `run-task TASK` | Preview, or with `--apply` write + test + score (`--yes`, `--by NAME`) |
+| `approve TASK [--reject] [--by] [--note]` | Record an approval decision |
+| `explain TASK` | Receipt: why / changed / checked / blocked / protected / approved |
+| `status`, `dashboard`, `report`, `pr-preview TASK` | Outcomes and reporting |
+
+Add `--json` to any command for machine-readable output. For the engine's internals, see [`omni_agent/README.md`](omni_agent/README.md).
+
+## Pricing
+
+| Plan | Price | For |
+|---|---:|---|
+| **Free** | $0 | Evaluate on a real repo: 25 tasks/month, rule mode, one workspace. **No credit card required.** |
+| **Pro** | $49 / seat / month | Individuals: 500 tasks/month, AI + rule fallback, reports, ROI, PR previews |
+| **Team** | $299 / workspace / month | Shared repos: 10 seats, 5,000 tasks/month, audit export, priority support |
+| **Enterprise** | From $2,000 / month | Controlled deployments: self-hosted, SSO, custom policies |
+
+Monthly plans can be cancelled anytime and stay active until the end of the billing period. Annual plans include two months free. The full feature matrix is in [`omni_agent/sales/pricing.md`](omni_agent/sales/pricing.md).
 
 ## GitHub App
 
@@ -119,19 +218,6 @@ It supports:
 The App currently requests only `metadata: read`. It does **not** read repository contents, open pull requests, or post checks on its own.
 
 That is deliberate: the task engine stays local, preserving the product promise that execution happens against the repository on the operator's machine. Expanding GitHub permissions is a later product decision, not a hidden requirement for v1.
-
-## Pricing
-
-![Omni-Agent pricing](docs/screenshots/pricing.png)
-
-| Plan | Current public price | Intended use |
-|---|---:|---|
-| Free | $0 | Try the local rule-mode loop |
-| Pro | $49 / seat / month | Founders and technical leads |
-| Team | $299 / workspace / month | Teams that need higher task volume and reporting |
-| Enterprise | From $2,000 / month | Controlled/private deployments and sales-assisted requirements |
-
-The product also advertises two months free on annual plans and a $149/month Team white-label reporting option. Those are current published offer terms in the product UI; billing should remain aligned with the live Stripe/GitHub configuration.
 
 ## Stripe now, GitHub Marketplace as the channel
 
@@ -157,6 +243,17 @@ See [`MARKETPLACE.md`](MARKETPLACE.md) for the current rollout checklist and [`D
 
 After installation, the App routes the operator to a real setup screen explaining the current boundary: the account is connected through GitHub, while the execution engine still runs locally against the repository.
 
+## Running the API locally
+
+The deployable backend uses Python 3.11.
+
+```bash
+pip install -r backend/requirements-deploy.txt
+cd backend && uvicorn server:app --host 0.0.0.0 --port 8000   # then GET /api/health
+```
+
+`backend/requirements-deploy.txt` is the public-host-safe dependency set. The original `backend/requirements.txt` also references an Emergent-private package; outside that environment, Omni-Agent falls back when that optional LLM integration is unavailable.
+
 ## Deploy
 
 A Render blueprint is included in [`render.yaml`](render.yaml) for two services:
@@ -173,8 +270,10 @@ Deployment credentials and external service URLs are environment configuration, 
 ```text
 backend/                 FastAPI API, billing, GitHub App and services
 frontend/                Public product / pricing web app
-omni_agent/              Local guarded execution engine
-scripts/omni_agent.py    CLI entrypoint
+omni_agent/              Local guarded execution engine (`omni-agent` CLI in omni_agent/cli.py)
+omni_agent/demo/repo/    Sample repo used by `omni-agent demo`
+scripts/omni_agent.py    CLI entrypoint for a checkout
+scripts/install.sh       One-line installer
 memory/tasks/            Markdown task intake
 render.yaml              Render deployment blueprint
 DEPLOY.md                Deployment / activation sequence

@@ -2,6 +2,8 @@
 
 Four tiers. Clear gates. No surprises. Prices in USD.
 
+**Low-risk evaluation:** Free needs no credit card. It gives you 25 real task runs a month on your own repo, and every run is a preview until you pass `--apply`. Monthly paid plans can be cancelled anytime and stay active until the end of the billing period.
+
 | | **Free** | **Pro** | **Team** | **Enterprise** |
 |---|---|---|---|---|
 | **Monthly price** | $0 | **$49 / seat** | **$299 / workspace** (includes 10 seats) | **Custom** — starts at $2,000 / mo |
