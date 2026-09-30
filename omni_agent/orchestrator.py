@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
@@ -23,8 +23,21 @@ from omni_agent.triage import triage_task
 logger = logging.getLogger("omni_agent.orchestrator")
 
 
+# Where a repo keeps its own Omni-Agent config (written by `omni-agent init`).
+WORKSPACE_CONFIG = Path(".omni-agent") / "config.yaml"
+PACKAGED_CONFIG = Path(__file__).resolve().parent / "config.yaml"
+
+
+def find_config(repo_root: Path) -> Optional[Path]:
+    """Return the repo's own config, or None when the repo was never initialised."""
+    for candidate in (repo_root / WORKSPACE_CONFIG, repo_root / "omni_agent" / "config.yaml"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def load_config(repo_root: Path, config_path: Optional[Path] = None) -> Dict[str, Any]:
-    cfg_path = config_path or (repo_root / "omni_agent" / "config.yaml")
+    cfg_path = config_path or find_config(repo_root) or PACKAGED_CONFIG
     with cfg_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     cfg["_config_path"] = str(cfg_path)
@@ -59,6 +72,7 @@ class Orchestrator:
                 normalized_text=t.text,
                 task_type=tri.task_type,
                 priority=tri.priority,
+                acceptance_criteria=t.acceptance,
             )
             if inserted:
                 new_count += 1
@@ -68,12 +82,34 @@ class Orchestrator:
         return {"parsed": len(parsed), "new": new_count, "existing": existing}
 
     # ---------- task pipeline ----------
-    def run_task(self, task_id: str, *, dry_run: bool = False) -> Dict[str, Any]:
+    def run_task(
+        self,
+        task_id: str,
+        *,
+        dry_run: bool = False,
+        confirm: Optional[Callable[[List[Dict[str, Any]]], bool]] = None,
+        approver: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run one task. `confirm` is shown the guarded change list before real
+        writes; `approver` is recorded against that decision."""
         task = self.state.get_task(task_id)
         if not task:
             raise ValueError(f"task {task_id} not found")
         if task["status"] == "done":
             return {"task_id": task_id, "skipped": "already done"}
+
+        safety = self.config.get("safety", {}) or {}
+        if not dry_run and safety.get("require_approval") and not self.state.is_approved(task_id):
+            return {
+                "task_id": task_id,
+                "run_id": None,
+                "final_status": "needs_approval",
+                "dry_run": False,
+                "risks_blockers": [
+                    f"safety.require_approval is on: record one with `omni-agent approve {task_id}` "
+                    "after reviewing the preview"
+                ],
+            }
 
         # triage (re-run)
         from omni_agent.scanner import ParsedTask  # local to avoid cycle
@@ -136,11 +172,23 @@ class Orchestrator:
         self.state.transition(task_id, "building", actor="orchestrator", run_id=run_id)
         dev_out = developer.run(
             task, tri.__dict__, spec, self.llm, self.guardrails, self.repo_root,
-            self.persona_mode, dry_run=dry_run,
+            self.persona_mode, dry_run=dry_run, confirm=confirm,
         )
         self.state.add_persona_output(run_id, task_id, "developer", dev_out["mode_used"], dev_out["patch"])
         for a in dev_out.get("applied", []):
             self.state.add_artifact(run_id, task_id, "file_change", a.get("path"), a)
+        for p in dev_out.get("filtered_paths", []) or []:
+            self.state.add_artifact(run_id, task_id, "guardrail_block", p,
+                                    {"path": p, "reason": self.guardrails.check_write(p)[1]})
+        if confirm is not None and not dry_run and not dev_out.get("blocked_context"):
+            planned = ", ".join(a.get("path", "") for a in dev_out.get("applied", []))
+            self.state.add_approval(
+                task_id, run_id=run_id, approver=approver or "operator",
+                decision="declined" if dev_out.get("declined") else "approved",
+                scope=f"writes: {planned}" if planned else "writes",
+            )
+        if dev_out.get("declined"):
+            dry_run = True
 
         if dev_out.get("blocked_context"):
             self.state.transition(task_id, "blocked_context", actor="developer",
@@ -156,18 +204,21 @@ class Orchestrator:
 
         if dry_run:
             # don't transition further; revert to not_started but keep artifacts as evidence
+            final = "declined" if dev_out.get("declined") else "dry_run"
+            reason = "writes declined at confirmation" if final == "declined" else "dry-run complete"
             self.state.transition(task_id, "not_started", actor="orchestrator",
-                                  reason="dry-run complete", run_id=run_id, force=True)
-            self.state.end_run(run_id, final_status="dry_run", cohesion_score=None,
-                               summary="dry-run: no evaluator, no writeback")
+                                  reason=reason, run_id=run_id, force=True)
+            self.state.end_run(run_id, final_status=final, cohesion_score=None,
+                               summary=f"{reason}: no evaluator, no writeback")
             return self._build_output(task, run_id, tri, spec, dev_out, None,
-                                      final_status="dry_run", blockers=[], dry_run=True)
+                                      final_status=final, blockers=[], dry_run=True)
 
         # EVALUATOR
         self.state.transition(task_id, "evaluating", actor="orchestrator", run_id=run_id)
         eval_out = evaluator.run(
             task, spec, dev_out, self.llm, self.repo_root, self.persona_mode,
             self.config.get("cohesion", {}).get("weights", {}),
+            test_path=(self.config.get("evaluation", {}) or {}).get("test_path", "backend/tests"),
         )
         self.state.add_persona_output(run_id, task_id, "evaluator", eval_out["mode_used"], eval_out)
         for t in [eval_out.get("tests", {})]:
@@ -214,11 +265,11 @@ class Orchestrator:
             out["client_report"] = None
         return out
 
-    def run_next(self, *, dry_run: bool = False) -> Optional[Dict[str, Any]]:
+    def run_next(self, *, dry_run: bool = False, **kwargs: Any) -> Optional[Dict[str, Any]]:
         nxt = self.state.next_runnable()
         if not nxt:
             return None
-        return self.run_task(nxt["id"], dry_run=dry_run)
+        return self.run_task(nxt["id"], dry_run=dry_run, **kwargs)
 
     def _attach_github_pr(
         self,

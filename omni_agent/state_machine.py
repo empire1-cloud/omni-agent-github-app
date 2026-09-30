@@ -123,6 +123,18 @@ CREATE TABLE IF NOT EXISTS test_executions (
   ts TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  approver TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  scope TEXT,
+  note TEXT,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_task_id ON approvals(task_id);
+
 CREATE TABLE IF NOT EXISTS run_config_snapshots (
   run_id TEXT PRIMARY KEY,
   config_json TEXT NOT NULL,
@@ -182,8 +194,10 @@ class StateMachine:
         normalized_text: str,
         task_type: Optional[str] = None,
         priority: int = 3,
+        acceptance_criteria: Optional[List[str]] = None,
     ) -> bool:
         ts = now_iso()
+        acceptance_json = json.dumps(acceptance_criteria) if acceptance_criteria else None
         with self.conn() as c:
             row = c.execute("SELECT id, status FROM tasks WHERE id = ?", (id,)).fetchone()
             if row:
@@ -191,17 +205,20 @@ class StateMachine:
                 c.execute(
                     """UPDATE tasks
                        SET source_file=?, source_line=?, raw_text=?, normalized_text=?,
-                           task_type=COALESCE(?, task_type), priority=?, updated_at=?
+                           task_type=COALESCE(?, task_type), priority=?, acceptance_criteria=?,
+                           updated_at=?
                        WHERE id=?""",
-                    (source_file, source_line, raw_text, normalized_text, task_type, priority, ts, id),
+                    (source_file, source_line, raw_text, normalized_text, task_type, priority,
+                     acceptance_json, ts, id),
                 )
                 return False
             c.execute(
                 """INSERT INTO tasks
                    (id, source_file, source_line, raw_text, normalized_text, task_type,
-                    priority, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'not_started', ?, ?)""",
-                (id, source_file, source_line, raw_text, normalized_text, task_type, priority, ts, ts),
+                    priority, acceptance_criteria, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'not_started', ?, ?)""",
+                (id, source_file, source_line, raw_text, normalized_text, task_type, priority,
+                 acceptance_json, ts, ts),
             )
             return True
 
@@ -340,6 +357,88 @@ class StateMachine:
                 (task_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    # ---------- approvals ----------
+    def add_approval(
+        self,
+        task_id: str,
+        *,
+        approver: str,
+        decision: str = "approved",
+        scope: Optional[str] = None,
+        note: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        with self.conn() as c:
+            c.execute(
+                """INSERT INTO approvals (task_id, run_id, approver, decision, scope, note, ts)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (task_id, run_id, approver, decision, scope, note, now_iso()),
+            )
+
+    def list_approvals(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM approvals"
+        args: tuple = ()
+        if task_id:
+            q += " WHERE task_id = ?"
+            args = (task_id,)
+        q += " ORDER BY ts ASC"
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(q, args).fetchall()]
+
+    def is_approved(self, task_id: str) -> bool:
+        """True when the most recent decision for the task is an approval."""
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT decision FROM approvals WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            return bool(row and row["decision"] == "approved")
+
+    # ---------- evidence queries ----------
+    def list_runs(self, task_id: str) -> List[Dict[str, Any]]:
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM task_runs WHERE task_id=? ORDER BY started_at ASC", (task_id,)
+            ).fetchall()]
+
+    def list_transitions(self, task_id: str) -> List[Dict[str, Any]]:
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM state_transitions WHERE task_id=? ORDER BY id ASC", (task_id,)
+            ).fetchall()]
+
+    def list_artifacts(self, *, task_id: Optional[str] = None, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        clauses, args = [], []
+        if task_id:
+            clauses.append("task_id=?")
+            args.append(task_id)
+        if run_id:
+            clauses.append("run_id=?")
+            args.append(run_id)
+        q = "SELECT * FROM artifacts"
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        q += " ORDER BY id ASC"
+        with self.conn() as c:
+            rows = [dict(r) for r in c.execute(q, tuple(args)).fetchall()]
+        for r in rows:
+            r["metadata"] = json.loads(r.pop("metadata_json") or "{}")
+        return rows
+
+    def persona_output(self, run_id: str, persona: str) -> Optional[Dict[str, Any]]:
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT output_json FROM persona_outputs WHERE run_id=? AND persona=? ORDER BY id DESC LIMIT 1",
+                (run_id, persona),
+            ).fetchone()
+        return json.loads(row["output_json"]) if row else None
+
+    def list_test_executions(self, run_id: str) -> List[Dict[str, Any]]:
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM test_executions WHERE run_id=? ORDER BY id ASC", (run_id,)
+            ).fetchall()]
 
     # ---------- export ----------
     def export_json(self, path: Path) -> Path:

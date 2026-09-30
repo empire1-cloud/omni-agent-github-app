@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from omni_agent.llm_client import LLMClient, LLMUnavailable
 
@@ -18,6 +18,18 @@ SYSTEM_PROMPT = (
     "impacted_files (array of relative path strings). "
     "Return JSON ONLY, no prose."
 )
+
+
+def _task_acceptance(task: Dict[str, Any]) -> List[str]:
+    """Acceptance criteria written by a person under the task (see scanner.ACCEPTANCE_RE)."""
+    raw = task.get("acceptance_criteria")
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return []
+    return [str(i) for i in items if i] if isinstance(items, list) else []
 
 
 def _rule_based_spec(task: Dict[str, Any], triage: Dict[str, Any]) -> Dict[str, Any]:
@@ -35,7 +47,7 @@ def _rule_based_spec(task: Dict[str, Any], triage: Dict[str, Any]) -> Dict[str, 
     if path_hints:
         assumptions.append(f"Target file path(s) inferred: {', '.join(path_hints)}")
 
-    acceptance_criteria = []
+    acceptance_criteria = _task_acceptance(task)
     if path_hints:
         for p in path_hints:
             acceptance_criteria.append(f"File '{p}' exists and is syntactically valid.")
@@ -53,6 +65,7 @@ def _rule_based_spec(task: Dict[str, Any], triage: Dict[str, Any]) -> Dict[str, 
     if not acceptance_criteria:
         acceptance_criteria.append("Task description is implemented end-to-end without modifying forbidden paths.")
 
+    acceptance_criteria = list(dict.fromkeys(acceptance_criteria))
     impacted_files = list(path_hints)
     if not impacted_files:
         if ttype == "backend":
@@ -77,6 +90,7 @@ def run(task: Dict[str, Any], triage: Dict[str, Any], llm: LLMClient, persona_mo
             user_payload = {
                 "task_id": task["id"],
                 "task_text": task["normalized_text"],
+                "stated_acceptance_criteria": _task_acceptance(task),
                 "triage": {
                     "task_type": triage.get("task_type"),
                     "priority": triage.get("priority"),

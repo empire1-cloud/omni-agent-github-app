@@ -92,3 +92,6 @@ credentials.json
 # ...but do track checked-in example/template env files (no real secrets in these)
 !.env.example
 !**/.env.example
+
+# Python packaging
+*.egg-info/

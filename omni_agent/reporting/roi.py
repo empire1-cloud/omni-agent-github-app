@@ -119,3 +119,62 @@ def format_summary_line(roi: Dict[str, Any]) -> str:
         f"hours_saved:{roi['estimated_hours_saved']} "
         f"cost_saved:{roi['currency']} {roi['estimated_cost_saved']}"
     )
+
+
+def _blocked_created_between(state: StateMachine, start: datetime, end: datetime) -> int:
+    with state.conn() as c:
+        return c.execute(
+            "SELECT COUNT(DISTINCT task_id) FROM state_transitions "
+            "WHERE to_state IN ('blocked_context','blocked_dependency') AND ts >= ? AND ts < ?",
+            (start.isoformat(), end.isoformat()),
+        ).fetchone()[0]
+
+
+def outcomes(state: StateMachine, config: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Plain-English outcome statements for the last 7 days, with the numbers behind them."""
+    now = now or datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    wk = compute_roi(state, config, since=week_ago)
+
+    with state.conn() as c:
+        protected = c.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE kind='guardrail_block' AND ts >= ?",
+            (week_ago.isoformat(),),
+        ).fetchone()[0]
+    blocked_this = _blocked_created_between(state, week_ago, now)
+    blocked_prev = _blocked_created_between(state, week_ago - timedelta(days=7), week_ago)
+    blocked_change = None
+    if blocked_prev:
+        blocked_change = round((blocked_this - blocked_prev) / blocked_prev * 100)
+
+    statements = []
+    if wk["tasks_completed"]:
+        statements.append(
+            f"Saved about {wk['estimated_hours_saved']:g} engineering hours last week "
+            f"({wk['tasks_completed']} verified task{'s' if wk['tasks_completed'] != 1 else ''})."
+        )
+    if wk["test_pass_rate"] is not None:
+        statements.append(f"{int(wk['test_pass_rate'] * 100)}% of test runs passed.")
+    if blocked_change is not None and blocked_change < 0:
+        statements.append(f"Blocked work down {abs(blocked_change)}% versus the week before.")
+    elif blocked_this:
+        statements.append(f"{blocked_this} task{'s' if blocked_this != 1 else ''} stopped and asked for input "
+                          "instead of guessing.")
+    if protected:
+        statements.append(f"Refused {protected} write{'s' if protected != 1 else ''} to protected paths.")
+    if not statements:
+        statements.append("No completed runs in the last 7 days yet — run a preview to get started.")
+
+    return {
+        "statements": statements,
+        "hours_saved_7d": wk["estimated_hours_saved"],
+        "cost_saved_7d": wk["estimated_cost_saved"],
+        "tasks_completed_7d": wk["tasks_completed"],
+        "test_pass_rate_7d": wk["test_pass_rate"],
+        "blocked_new_7d": blocked_this,
+        "blocked_new_prev_7d": blocked_prev,
+        "blocked_change_pct": blocked_change,
+        "protected_writes_7d": protected,
+        "currency": wk["currency"],
+        "assumptions": wk["assumptions"],
+    }

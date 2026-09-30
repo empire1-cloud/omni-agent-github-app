@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from omni_agent.guardrails import Guardrails, GuardrailViolation
 from omni_agent.llm_client import LLMClient, LLMUnavailable
@@ -69,6 +69,8 @@ def _pick_target_path(spec: Dict[str, Any], task: Dict[str, Any], guardrails: Gu
                 return p, "core"
             if p.endswith(".md"):
                 return p, "docs"
+            if p.endswith(".py") and not Path(p).name.startswith("test_"):
+                return p, "core"
             return p, "generic"
 
     # derive from task text
@@ -77,14 +79,42 @@ def _pick_target_path(spec: Dict[str, Any], task: Dict[str, Any], guardrails: Gu
     return f"backend/app/services/{slug}_service.py", "service"
 
 
+def _protected_hints(spec: Dict[str, Any], guardrails: Guardrails) -> List[str]:
+    """Concrete impacted paths the guardrails refused, kept as evidence of what was protected."""
+    return [
+        p for p in (spec.get("impacted_files") or [])
+        if "<" not in p and ">" not in p and not guardrails.check_write(p)[0]
+    ]
+
+
 def _rule_based_patch(spec: Dict[str, Any], task: Dict[str, Any], guardrails: Guardrails) -> Dict[str, Any]:
     target, kind = _pick_target_path(spec, task, guardrails)
+    filtered = _protected_hints(spec, guardrails)
+    if filtered and target not in (spec.get("impacted_files") or []):
+        # the task named a path the guardrails refuse; never redirect the work somewhere else
+        return {
+            "changes": [],
+            "notes": "blocked: requested path is protected — "
+                     + "; ".join(guardrails.check_write(p)[1] for p in filtered),
+            "blocked": True,
+            "filtered_paths": filtered,
+        }
     ok, msg = guardrails.check_write(target)
     if not ok:
         return {
             "changes": [],
             "notes": f"blocked: target '{target}' not writable ({msg})",
             "blocked": True,
+            "filtered_paths": filtered,
+        }
+
+    if kind != "docs" and (guardrails.repo_root / target).exists():
+        # rule mode only scaffolds new files; editing existing code needs the LLM path
+        return {
+            "changes": [],
+            "notes": f"blocked: '{target}' already exists and rule mode never overwrites files",
+            "blocked": True,
+            "filtered_paths": filtered,
         }
 
     slug = _slug(Path(target).stem)
@@ -125,6 +155,8 @@ def _rule_based_patch(spec: Dict[str, Any], task: Dict[str, Any], guardrails: Gu
         ],
         "notes": f"rule-based stub generated ({kind})",
         "blocked": False,
+        "filtered_paths": filtered,
+        "proposed_total": 1 + len(filtered),
     }
 
 
@@ -176,7 +208,10 @@ def run(
     repo_root: Path,
     persona_mode: str,
     dry_run: bool,
+    confirm: Optional[Callable[[List[Dict[str, Any]]], bool]] = None,
 ) -> Dict[str, Any]:
+    """`confirm`, when given, sees the guarded change list before any real write
+    and can veto it; a veto leaves the run as a preview."""
     patch = None
     mode_used = "rule"
 
@@ -231,10 +266,17 @@ def run(
             "errors": [],
             "mode_used": mode_used,
             "blocked_context": patch.get("notes", "no writable target inferred"),
+            "filtered_paths": patch.get("filtered_paths", []),
         }
+
+    declined = False
+    if not dry_run and confirm is not None and not confirm(patch["changes"]):
+        declined = True
+        dry_run = True
 
     applied, errors = _apply_changes(repo_root, patch["changes"], guardrails, dry_run=dry_run)
     return {
+        "declined": declined,
         "patch": patch,
         "applied": applied,
         "errors": errors,

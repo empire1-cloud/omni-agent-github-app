@@ -1,12 +1,14 @@
 """Evaluator persona: validates acceptance criteria, runs tests, computes cohesion."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
 import py_compile
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,7 +47,9 @@ def _run_pytest(repo_root: Path, target: str = "backend/tests") -> Dict[str, Any
     target_path = repo_root / target
     if not target_path.exists() or not any(target_path.rglob("test_*.py")):
         return {"ran": False, "exit_code": None, "status": "skipped", "output": "no tests found"}
-    cmd = ["python", "-m", "pytest", "-q", str(target_path)]
+    if importlib.util.find_spec("pytest") is None:
+        return {"ran": False, "exit_code": None, "status": "skipped", "output": "pytest not installed"}
+    cmd = [sys.executable, "-m", "pytest", "-q", target]
     try:
         res = subprocess.run(
             cmd, cwd=str(repo_root), capture_output=True, text=True, timeout=90
@@ -56,7 +60,7 @@ def _run_pytest(repo_root: Path, target: str = "backend/tests") -> Dict[str, Any
             "exit_code": res.returncode,
             "status": "pass" if res.returncode == 0 else "fail",
             "output": out[-2000:],
-            "command": " ".join(cmd),
+            "command": " ".join([Path(sys.executable).name, *cmd[1:]]),
         }
     except subprocess.TimeoutExpired:
         return {"ran": True, "exit_code": -1, "status": "fail", "output": "pytest timeout"}
@@ -99,6 +103,7 @@ def _run_lint(repo_root: Path, paths: List[str]) -> Dict[str, Any]:
 def _evaluate_criteria_rule(
     criteria: List[str], applied_paths: List[str], repo_root: Path,
     filtered_paths: Optional[List[str]] = None,
+    test_path: str = "backend/tests",
 ) -> List[Dict[str, Any]]:
     """Heuristic acceptance evaluation. Criteria mentioning filtered (guardrail-rejected)
     paths are marked out_of_scope and excluded from scoring."""
@@ -163,7 +168,7 @@ def _evaluate_criteria_rule(
                     evidence += f"doc updated: {p}; "
                     break
         elif "tests" in c_lower and "pass" in c_lower:
-            pt = _run_pytest(repo_root)
+            pt = _run_pytest(repo_root, test_path)
             met = pt["status"] == "pass"
             evidence = f"pytest:{pt['status']}"
         else:
@@ -277,13 +282,14 @@ def run(
     repo_root: Path,
     persona_mode: str,
     weights: Dict[str, int],
+    test_path: str = "backend/tests",
 ) -> Dict[str, Any]:
     applied = dev_result.get("applied", []) or []
     applied_paths = [a["path"] for a in applied if a.get("path")]
     criteria = spec.get("acceptance_criteria") or []
 
     # Tests
-    test_run = _run_pytest(repo_root)
+    test_run = _run_pytest(repo_root, test_path)
     # Lint
     lint_run = _run_lint(repo_root, applied_paths)
     # Regression: ensure no forbidden path was touched (already enforced) and
@@ -332,6 +338,7 @@ def run(
         criteria_results = _evaluate_criteria_rule(
             criteria, applied_paths, repo_root,
             filtered_paths=dev_result.get("filtered_paths", []),
+            test_path=test_path,
         )
 
     guardrail = _guardrail_compliance(dev_result)

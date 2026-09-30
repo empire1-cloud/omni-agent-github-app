@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -24,12 +25,16 @@ class Guardrails:
             except ValueError:
                 # outside repo root -> treat as raw absolute, will fail any allow pattern
                 return str(p)
-        return str(p).replace("\\", "/")
+        # collapse `a/../b` so a traversal can't borrow an allowed prefix
+        return posixpath.normpath(str(p).replace("\\", "/"))
 
     @staticmethod
     def _match_any(rel_path: str, patterns: List[str]) -> bool:
         for pat in patterns:
             if fnmatch.fnmatch(rel_path, pat):
+                return True
+            # a leading `**/` also matches zero directories: `**/.env` covers a root `.env`
+            if pat.startswith("**/") and Guardrails._match_any(rel_path, [pat[3:]]):
                 return True
             # support `**` style: convert to fnmatch by also checking parents
             if "**" in pat:
