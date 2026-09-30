@@ -38,6 +38,18 @@ evidence preview → authenticated PR → check-run completion loop.
 4. `curl https://<api-domain>/api/health` → confirm `200`, everything
    reports `false`/unconfigured except what you've actually set.
 
+### Vercel (alternative host for the landing page)
+
+The existing Vercel project `empire1-lyrica-ecosystem` has its **Root Directory set to `backend`**. It serves only the FastAPI API, so `/api/health` answers and `/` returns `{"detail":"Not Found"}`. The landing page in `frontend/` is not deployed there.
+
+To publish the landing page, add a second Vercel project from this repo:
+
+1. Vercel → Add New → Project → import `empire1-cloud/omni-agent-github-app`.
+2. Set **Root Directory** to `frontend`. `frontend/vercel.json` supplies the install and build commands, the `build` output folder, and SPA rewrites.
+3. Add the build-time env vars from `frontend/.env.example`. At minimum, set `REACT_APP_BACKEND_URL` to the API deployment URL so Stripe checkout works.
+4. On the API project, set `CORS_ORIGINS` to the new frontend URL.
+5. Previews are behind Vercel Authentication by default. Turn off Deployment Protection for production if the page should be public.
+
 ## 3. Get a first dollar via Stripe (the bridge, works today)
 
 1. Stripe → create Pro ($49/mo) and Team ($299/mo) products, test mode
