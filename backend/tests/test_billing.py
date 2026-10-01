@@ -64,7 +64,7 @@ def test_checkout_happy_path_returns_stripe_url(monkeypatch, tmp_path):
     import app.services.customer_store as customer_store
 
     monkeypatch.setattr(customer_store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(customer_store, "CUSTOMERS_JSONL", tmp_path / "customers.jsonl")
+    monkeypatch.setattr(customer_store, "CUSTOMERS_FILE", "customers.jsonl")
 
     resp = client.post(
         "/api/billing/checkout",

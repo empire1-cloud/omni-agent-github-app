@@ -69,7 +69,7 @@ def test_webhook_accepts_unknown_event_without_error(monkeypatch):
 def test_installation_created_is_recorded(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test_webhook_secret")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(store, "INSTALLATIONS_JSONL", tmp_path / "installs.jsonl")
+    monkeypatch.setattr(store, "INSTALLATIONS_FILE", "installs.jsonl")
 
     resp = _post_webhook(
         "installation",
@@ -92,7 +92,7 @@ def test_installation_created_is_recorded(monkeypatch, tmp_path):
 def test_marketplace_purchased_is_recorded_as_active(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test_webhook_secret")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(store, "MARKETPLACE_JSONL", tmp_path / "mp.jsonl")
+    monkeypatch.setattr(store, "MARKETPLACE_FILE", "mp.jsonl")
 
     resp = _post_webhook(
         "marketplace_purchase",
@@ -120,7 +120,7 @@ def test_marketplace_purchased_is_recorded_as_active(monkeypatch, tmp_path):
 def test_marketplace_cancelled_is_recorded_as_inactive(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test_webhook_secret")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(store, "MARKETPLACE_JSONL", tmp_path / "mp.jsonl")
+    monkeypatch.setattr(store, "MARKETPLACE_FILE", "mp.jsonl")
 
     resp = _post_webhook(
         "marketplace_purchase",
@@ -152,7 +152,7 @@ def test_all_marketplace_actions_are_handled_without_error(monkeypatch, tmp_path
     endpoint that errors on events it's subscribed to."""
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test_webhook_secret")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(store, "MARKETPLACE_JSONL", tmp_path / "mp.jsonl")
+    monkeypatch.setattr(store, "MARKETPLACE_FILE", "mp.jsonl")
 
     resp = _post_webhook(
         "marketplace_purchase",
@@ -171,7 +171,7 @@ def test_all_marketplace_actions_are_handled_without_error(monkeypatch, tmp_path
 def test_installation_repositories_event_is_recorded(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test_webhook_secret")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(store, "INSTALLATIONS_JSONL", tmp_path / "installs.jsonl")
+    monkeypatch.setattr(store, "INSTALLATIONS_FILE", "installs.jsonl")
 
     resp = _post_webhook(
         "installation_repositories",

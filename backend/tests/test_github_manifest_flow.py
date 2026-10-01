@@ -86,3 +86,29 @@ def test_manifest_callback_happy_path(monkeypatch):
     assert "GITHUB_APP_ID" in resp.text
     assert "123456" in resp.text
     assert "fake_webhook_secret" in resp.text
+
+
+def test_state_verifies_on_another_instance(monkeypatch):
+    # serverless: the callback can land on a fresh process with no memory of the form
+    monkeypatch.setenv("MANIFEST_STATE_SECRET", "shared-secret")
+    state = manifest_svc.issue_state()
+    monkeypatch.setattr(manifest_svc, "_used_states", set())
+    monkeypatch.setattr(manifest_svc, "_PROCESS_KEY", b"a different process key")
+    assert manifest_svc.consume_state(state) is True
+
+
+def test_state_rejects_tampering_and_expiry(monkeypatch):
+    monkeypatch.setenv("MANIFEST_STATE_SECRET", "shared-secret")
+    state = manifest_svc.issue_state()
+    expires, nonce, sig = state.split(".")
+    assert manifest_svc.consume_state(f"{int(expires) + 999}.{nonce}.{sig}") is False
+    assert manifest_svc.consume_state("garbage") is False
+    monkeypatch.setattr(manifest_svc.time, "time", lambda: int(expires) + 1)
+    assert manifest_svc.consume_state(state) is False
+
+
+def test_state_signed_with_another_secret_is_rejected(monkeypatch):
+    monkeypatch.setenv("MANIFEST_STATE_SECRET", "one")
+    state = manifest_svc.issue_state()
+    monkeypatch.setenv("MANIFEST_STATE_SECRET", "two")
+    assert manifest_svc.consume_state(state) is False

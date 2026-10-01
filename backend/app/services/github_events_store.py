@@ -6,17 +6,19 @@ JSONL files so an install audit and a billing audit don't interleave.
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.core import storage
+from app.core.storage import append_jsonl
+
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-INSTALLATIONS_JSONL = DATA_DIR / "github_installations.jsonl"
-MARKETPLACE_JSONL = DATA_DIR / "github_marketplace_events.jsonl"
+DATA_DIR: Optional[Path] = None  # tests override; None = app.core.storage.data_dir()
+INSTALLATIONS_FILE = "github_installations.jsonl"
+MARKETPLACE_FILE = "github_marketplace_events.jsonl"
 
 # Marketplace webhook actions that mean "this account should be paying /
 # still-paying customer at `plan`" vs "cancelled". See
@@ -25,10 +27,12 @@ ACTIVE_ACTIONS = {"purchased", "changed", "pending_change"}
 INACTIVE_ACTIONS = {"cancelled"}
 
 
-def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, default=str) + "\n")
+def _append_jsonl(filename: str, record: Dict[str, Any]) -> None:
+    if not append_jsonl((DATA_DIR or storage.data_dir()) / filename, record):
+        return
+    if not storage.event_storage_durable():
+        logger.warning("%s recorded to %s, which this host does not keep; set MONGO_URL "
+                       "or OMNI_AGENT_DATA_DIR", record.get("event"), storage.data_dir())
 
 
 async def record_installation_event(
@@ -44,7 +48,7 @@ async def record_installation_event(
         "repository_selection": repository_selection,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    _append_jsonl(INSTALLATIONS_JSONL, record)
+    _append_jsonl(INSTALLATIONS_FILE, record)
     if db is not None:
         try:
             await db.github_installations.update_one(
@@ -93,7 +97,7 @@ async def record_marketplace_event(
         "effective_date": effective_date,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    _append_jsonl(MARKETPLACE_JSONL, record)
+    _append_jsonl(MARKETPLACE_FILE, record)
     if db is not None:
         try:
             await db.marketplace_events.insert_one(dict(record))
