@@ -63,6 +63,12 @@ To publish the landing page, add a second Vercel project from this repo:
 
 ## 4. Stand up the GitHub App
 
+0. On the API deployment, set `APP_BASE_URL` (the API's public URL),
+   `FRONTEND_BASE_URL` (the site's public URL) and `MANIFEST_STATE_SECRET`
+   (any long random string), then redeploy. Without the two base URLs the
+   manifest carries relative webhook/callback URLs that GitHub can't use.
+   On Vercel, also set `MONGO_URL`: `/api/health` must show
+   `event_storage_durable: true`, or install records are lost.
 1. Visit `https://<api-domain>/api/github/app/new`, review the manifest,
    confirm on GitHub — this creates the real App.
 2. Copy the one-time-shown credentials into `GITHUB_APP_ID`,

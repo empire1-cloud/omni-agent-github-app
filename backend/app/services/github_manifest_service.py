@@ -10,50 +10,75 @@ Flow (https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-a
    module, and shows them ONCE so she can copy them into env vars. Nothing
    here persists those values to disk/db/logs.
 
-CSRF protection: a random `state` is generated when serving the form and
-must come back unchanged on the callback. Kept in an in-memory TTL store —
-fine for a one-person, one-time bootstrap action; not meant to survive a
-multi-instance deploy (documented limitation, not a product requirement).
+CSRF protection: a `state` token is issued when serving the form and must
+come back unchanged on the callback. The token is self-verifying:
+`<expiry>.<nonce>.<hmac>`, so the callback can be served by a different
+instance than the form (serverless hosts such as Vercel do exactly that).
+The HMAC key is MANIFEST_STATE_SECRET, falling back to
+OMNI_AGENT_INTERNAL_TOKEN; with neither set, a per-process key is used,
+which only works when one process serves both requests. Each token is also
+single-use within a process. GitHub's manifest `code` is itself single-use,
+so a cross-instance replay of `state` cannot mint a second App.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import logging
+import os
 import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 GITHUB_API_BASE = "https://api.github.com"
 _STATE_TTL_SECONDS = 15 * 60
-_pending_states: Dict[str, float] = {}
+_PROCESS_KEY = secrets.token_bytes(32)
+_used_states: Set[str] = set()
 
 
 class ManifestExchangeError(RuntimeError):
     """Raised when GitHub rejects the manifest-code exchange."""
 
 
+def _state_key() -> bytes:
+    secret = os.environ.get("MANIFEST_STATE_SECRET") or os.environ.get("OMNI_AGENT_INTERNAL_TOKEN")
+    if secret:
+        return secret.encode("utf-8")
+    logger.warning("MANIFEST_STATE_SECRET is not set; manifest state only verifies on this instance")
+    return _PROCESS_KEY
+
+
+def _sign(payload: str) -> str:
+    digest = hmac.new(_state_key(), payload.encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
 def issue_state() -> str:
-    token = secrets.token_urlsafe(24)
-    _pending_states[token] = time.time() + _STATE_TTL_SECONDS
-    _prune_expired()
-    return token
+    payload = f"{int(time.time()) + _STATE_TTL_SECONDS}.{secrets.token_urlsafe(16)}"
+    return f"{payload}.{_sign(payload)}"
 
 
 def consume_state(token: Optional[str]) -> bool:
-    """Returns True and invalidates the token iff it was issued and not
-    expired. Single-use — a replayed state fails."""
-    _prune_expired()
-    if not token or token not in _pending_states:
+    """True iff the token carries a valid signature, has not expired, and
+    has not already been used in this process."""
+    if not token or token.count(".") != 2:
         return False
-    del _pending_states[token]
+    payload, sig = token.rsplit(".", 1)
+    if not hmac.compare_digest(sig, _sign(payload)):
+        return False
+    try:
+        expires = int(payload.split(".", 1)[0])
+    except ValueError:
+        return False
+    if expires < time.time() or token in _used_states:
+        return False
+    _used_states.add(token)
     return True
-
-
-def _prune_expired() -> None:
-    now = time.time()
-    expired = [t for t, exp in _pending_states.items() if exp < now]
-    for t in expired:
-        _pending_states.pop(t, None)
 
 
 async def exchange_manifest_code(code: str) -> Dict[str, Any]:

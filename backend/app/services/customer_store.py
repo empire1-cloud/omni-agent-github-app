@@ -8,22 +8,22 @@ trail. Never deletes or overwrites — append-only.
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.core import storage
+from app.core.storage import append_jsonl
+
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-CUSTOMERS_JSONL = DATA_DIR / "customers.jsonl"
+DATA_DIR: Optional[Path] = None  # tests override; None = app.core.storage.data_dir()
+CUSTOMERS_FILE = "customers.jsonl"
 
 
 def _append_jsonl(record: Dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with CUSTOMERS_JSONL.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, default=str) + "\n")
+    append_jsonl((DATA_DIR or storage.data_dir()) / CUSTOMERS_FILE, record)
 
 
 async def record_checkout_started(
